@@ -1,0 +1,81 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Monitor and Delete Unused EBS Volume using AWS Config Rule. Take snapshot before deletion.
+Parameters:
+  RuleName:
+    Description: Name of Config Rule
+    Type: String
+  IsSnpashotRequired:
+    Description: The AWS Region of the central monitoring account. Either true or false.
+    Type: String
+    Default: true
+    AllowedValues:
+      - true
+      - false
+     
+Resources:
+  ConfigServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ssm.amazonaws.com
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              aws:SourceAccount: !Sub ${AWS::AccountId}
+            ArnLike:
+              aws:SourceArn: !Sub arn:aws:ssm:*:${AWS::AccountId}:automation-execution/*
+      Policies:
+        - PolicyName: ConfigVolumeAccessPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeVolumes
+                  - ec2:CreateSnapshot
+                  - ec2:CreateTags
+                  - ec2:DeleteVolume
+                  - ec2:DescribeSnapshots
+                Resource: "*"
+      Path: "/"
+      RoleName: ConfigServiceRole
+  ConfigRule:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: !Ref RuleName
+      Description: Checks whether Amazon EBS volumes are attached to EC2 instances. Deletes unused volumes if detected.
+      Source:
+        Owner: AWS
+        SourceIdentifier: EC2_VOLUME_INUSE_CHECK
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::EC2::Volume
+
+  ConfigRemediation:
+    Type: AWS::Config::RemediationConfiguration
+    Properties:
+      ConfigRuleName: !Ref ConfigRule 
+      TargetType: SSM_DOCUMENT
+      TargetId: AWSConfigRemediation-DeleteUnusedEBSVolume
+      Automatic: true
+      MaximumAutomaticAttempts: 1
+      RetryAttemptSeconds: 180
+      Parameters:
+        AutomationAssumeRole:
+          StaticValue:
+            Values:
+            - !GetAtt ConfigServiceRole.Arn
+        VolumeId:
+          ResourceValue: 
+            Value: 'RESOURCE_ID'
+        CreateSnapshot:
+          StaticValue:
+            Values: 
+            - !Ref IsSnpashotRequired
